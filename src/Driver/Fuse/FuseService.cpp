@@ -663,10 +663,6 @@ namespace VeraCrypt
 		args.push_back ("nobrowse");
 
 #ifdef VC_MACOSX_FUSET
-		// Use FUSE-T's SMB backend for the auxiliary mount. The default NFS
-		// backend can be affected by macOS Network Volumes privacy state.
-		args.push_back ("-o");
-		args.push_back ("backend=smb");
 		args.push_back ("-o");
 		args.push_back ("nonamedattr");
 		args.push_back ("-o");
