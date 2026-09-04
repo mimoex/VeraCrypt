@@ -78,18 +78,19 @@ VC_INLINE uint8x16_t aes256_hw_encrypt_tweak(uint8x16_t tweak, const uint8* ks)
 
 VC_INLINE uint8x16_t xts_mul_x(uint8x16_t tweak)
 {
-    const uint64x2_t zero = vdupq_n_u64(0);
-    const uint64x2_t polynomial = vdupq_n_u64(0x87);
-    const uint64x2_t lanes = vreinterpretq_u64_u8(tweak);
-    const uint64x2_t carries = vshrq_n_u64(lanes, 63);
-    const uint64x2_t lowCarry = vextq_u64(zero, carries, 1);
-    const uint64x2_t highCarry = vextq_u64(carries, zero, 1);
-    const uint64x2_t reductionMask = vreinterpretq_u64_s64(
-        vnegq_s64(vreinterpretq_s64_u64(highCarry)));
-    const uint64x2_t shifted = vorrq_u64(vshlq_n_u64(lanes, 1), lowCarry);
+    const uint8x16_t polynomial =
+        vsetq_lane_u8(0x87, vdupq_n_u8(1), 0);
 
-    return vreinterpretq_u8_u64(
-        veorq_u64(shifted, vandq_u64(reductionMask, polynomial)));
+    const int8x16_t carryMask =
+        vshrq_n_s8(vreinterpretq_s8_u8(tweak), 7);
+
+    const uint8x16_t carries =
+        vreinterpretq_u8_s8(
+            vextq_s8(carryMask, carryMask, 15));
+
+    return veorq_u8(
+        vshlq_n_u8(tweak, 1),
+        vandq_u8(carries, polynomial));
 }
 
 // Single block decryption operations
