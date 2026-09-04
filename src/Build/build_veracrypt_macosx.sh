@@ -101,8 +101,12 @@ if [ "$brew" = true ]; then
     export CPU_ARCH=$(uname -m)
     export AS=$(which yasm)
     export COMPILE_ASM=$( if [[ "$CPU_ARCH" != "arm64" ]]; then echo true; else echo false; fi )
-    make clean
-    make
+    if [ "${VC_INCREMENTAL_BUILD:-0}" != "1" ]; then
+        make clean
+    fi
+
+    JOBS="${VC_BUILD_JOBS:-$(sysctl -n hw.logicalcpu)}"
+    make -j"$JOBS"
     if [ "$package" = true ]; then
         make package
     fi
