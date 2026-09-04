@@ -245,12 +245,14 @@ void sha512_begin(sha512_ctx* ctx)
 		else
 #endif
 
-#endif
-		#if CRYPTOPP_BOOL_ARM64 && defined(TC_MACOSX)
+#if CRYPTOPP_BOOL_ARM64 && defined(TC_MACOSX)
+		if (HasSHA512())
 			transfunc = ArmSha512Transform;
-		#else
+		else
+#endif
+
+#endif
 			transfunc = StdTransform;
-		#endif
 	}
 }
 

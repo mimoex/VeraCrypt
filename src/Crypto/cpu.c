@@ -485,9 +485,14 @@ void DisableCPUExtendedFeatures ()
 # define HWCAP_SHA2 (1 << 6)
 #endif
 #endif
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
 
 volatile int g_hasAESARM = 0;
 volatile int g_hasSHA256ARM = 0;
+volatile int g_hasSHA512ARM = 0;
 
 inline int CPU_QueryAES()
 {
@@ -537,10 +542,31 @@ inline int CPU_QuerySHA2()
 #endif
 }
 
+inline int CPU_QuerySHA512()
+{
+#if defined(__APPLE__) && defined(__aarch64__)
+	int supported = 0;
+	size_t size = sizeof(supported);
+
+	if (sysctlbyname(
+		"hw.optional.armv8_2_sha512",
+		&supported,
+		&size,
+		NULL,
+		0) == 0)
+	{
+		return supported != 0;
+	}
+#endif
+
+	return 0;
+}
+
 void DetectArmFeatures()
 {
 	g_hasAESARM  = CPU_QueryAES();
 	g_hasSHA256ARM = CPU_QuerySHA2();
+	g_hasSHA512ARM = CPU_QuerySHA512();
 }
 
 #endif
