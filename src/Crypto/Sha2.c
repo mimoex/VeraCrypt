@@ -25,6 +25,10 @@ extern "C"
 	void sha512_sse4(const void* M, uint_64t D[8], uint_64t l);
 	void sha512_avx(const void* M, void* D, uint_64t l);
 #endif
+
+#if CRYPTOPP_BOOL_ARM64 && defined(TC_MACOSX)
+    void sha512_compress_digest_armv8(const void* input_data, uint_64t digest[8], uint_64t num_blks);
+#endif
 	
 #if CRYPTOPP_BOOL_X64 || ((CRYPTOPP_BOOL_X86 || CRYPTOPP_BOOL_X32) && !defined (TC_MACOSX))
 	void VC_CDECL sha512_compress_nayuki(uint_64t state[8], const uint_8t block[128]);
@@ -150,6 +154,21 @@ void StdTransform(sha512_ctx* ctx, void* mp, uint_64t num_blks)
 
 #ifndef NO_OPTIMIZED_VERSIONS
 
+#if CRYPTOPP_BOOL_ARM64 && defined(TC_MACOSX)
+
+void ArmSha512Transform(
+	sha512_ctx* ctx,
+	void* mp,
+	uint_64t num_blks)
+{
+	sha512_compress_digest_armv8(
+		mp,
+		ctx->hash,
+		num_blks);
+}
+
+#endif
+
 #if CRYPTOPP_BOOL_X64
 void Avx2Transform(sha512_ctx* ctx, void* mp, uint_64t num_blks)
 {
@@ -227,7 +246,11 @@ void sha512_begin(sha512_ctx* ctx)
 #endif
 
 #endif
+		#if CRYPTOPP_BOOL_ARM64 && defined(TC_MACOSX)
+			transfunc = ArmSha512Transform;
+		#else
 			transfunc = StdTransform;
+		#endif
 	}
 }
 

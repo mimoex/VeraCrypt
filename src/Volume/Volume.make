@@ -45,6 +45,7 @@ ifeq "$(LOCAL_DEVELOPMENT_BUILD):$(CPU_ARCH)" "true:arm64"
 	OBJARMV8CRYPTO += ../Crypto/Aes_hw_armv8.oarmv8crypto
 	OBJS += ../Crypto/Aescrypt.o
 	OBJARMV8CRYPTO += ../Crypto/sha256_armv8.oarmv8crypto
+	OBJARMV8CRYPTO += ../Crypto/sha512_armv8.oarmv8crypto
 else ifneq "$(COMPILE_ASM)" "false"
 	OBJSEX += ../Crypto/Aes_asm.oo
 	OBJS += ../Crypto/Aes_hw_cpu.o
@@ -91,6 +92,7 @@ else ifeq "$(CPU_ARCH)" "arm64"
 	OBJARMV8CRYPTO += ../Crypto/Aes_hw_armv8.oarmv8crypto
 	OBJS += ../Crypto/Aescrypt.o
 	OBJARMV8CRYPTO += ../Crypto/sha256_armv8.oarmv8crypto
+	OBJARMV8CRYPTO += ../Crypto/sha512_armv8.oarmv8crypto
 else
 	OBJS += ../Crypto/Aescrypt.o
 endif
@@ -184,6 +186,9 @@ ifneq "$(COMPILE_ASM)" "false"
 	$(CC) $(CFLAGS_X64) -c ../Crypto/sha256_armv8.c -o ../Crypto/sha256_armv8_x64.o
 	lipo -create ../Crypto/sha256_armv8_arm64.o ../Crypto/sha256_armv8_x64.o -output ../Crypto/sha256_armv8.oo
 	rm -fr ../Crypto/sha256_armv8_arm64.o ../Crypto/sha256_armv8_x64.o
+../Crypto/sha512_armv8.oarmv8crypto: ../Crypto/sha512_armv8.c
+	@echo Compiling $(<F)
+	$(CC) $(CFLAGS) -march=armv8.2-a+sha3 -c $< -o $@
 ../Crypto/Aes_asm.oo: ../Crypto/Aes_x86.asm ../Crypto/Aes_x64.asm
 	@echo Assembling $(<F)
 	$(AS) $(ASFLAGS32) -o ../Crypto/Aes_x86.o ../Crypto/Aes_x86.asm
