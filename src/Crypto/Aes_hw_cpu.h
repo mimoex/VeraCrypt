@@ -29,6 +29,28 @@ void VC_CDECL aes_hw_cpu_decrypt_32_blocks (const uint8 *ks, uint8 *data);
 void aes_hw_cpu_encrypt (const uint8 *ks, uint8 *data);
 void VC_CDECL aes_hw_cpu_encrypt_32_blocks (const uint8 *ks, uint8 *data);
 
+void VC_CDECL aes_hw_cpu_encrypt_xts_32_blocks (
+    const uint8 *ks,
+    uint8 *data,
+    const uint8 *tweaks);
+
+void VC_CDECL aes_hw_cpu_decrypt_xts_32_blocks (
+    const uint8 *ks,
+    uint8 *data,
+    const uint8 *tweaks);
+
+void VC_CDECL aes_hw_cpu_encrypt_xts_data_unit (
+    const uint8 *ks,
+    const uint8 *ks2,
+    uint8 *data,
+    const uint8 *dataUnitNo);
+
+void VC_CDECL aes_hw_cpu_decrypt_xts_data_unit (
+    const uint8 *ks,
+    const uint8 *ks2,
+    uint8 *data,
+    const uint8 *dataUnitNo);
+
 #if defined(__cplusplus)
 }
 #endif

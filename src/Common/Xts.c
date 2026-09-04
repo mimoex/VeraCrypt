@@ -30,6 +30,9 @@ For big-endian platforms define BYTE_ORDER as BIG_ENDIAN. */
 #ifndef TC_NO_COMPILER_INT64
 #include "cpu.h"
 #include "misc.h"
+#if CRYPTOPP_BOOL_ARM64 && defined(CRYPTOPP_ARM_NEON_AVAILABLE)
+#include <arm_neon.h>
+#endif
 #endif
 #include "Xts.h"
 
@@ -66,6 +69,8 @@ void EncryptBufferXTS (unsigned __int8 *buffer,
 
 #if (CRYPTOPP_BOOL_SSE2_INTRINSICS_AVAILABLE && CRYPTOPP_BOOL_X64)
 
+#define TC_XTS_SIMD_XOR 1
+
 #define XorBlocks(result,ptr,len,start,end) \
     while (len >= 2) \
     { \
@@ -73,24 +78,67 @@ void EncryptBufferXTS (unsigned __int8 *buffer,
         __m128i xmm2 = _mm_loadu_si128((__m128i*)result); \
         __m128i xmm3 = _mm_loadu_si128((const __m128i*) (ptr + 2)); \
         __m128i xmm4 = _mm_loadu_si128((__m128i*)(result + 2)); \
-		 \
+        \
         _mm_storeu_si128((__m128i*)result, _mm_xor_si128(xmm1, xmm2)); \
         _mm_storeu_si128((__m128i*)(result + 2), _mm_xor_si128(xmm3, xmm4)); \
-        ptr+= 4; \
-        result+= 4; \
+        ptr += 4; \
+        result += 4; \
         len -= 2; \
     } \
-	 \
+    \
     if (len) \
     { \
         __m128i xmm1 = _mm_loadu_si128((const __m128i*)ptr); \
         __m128i xmm2 = _mm_loadu_si128((__m128i*)result); \
-		 \
+        \
         _mm_storeu_si128((__m128i*)result, _mm_xor_si128(xmm1, xmm2)); \
-        ptr+= 2; \
-        result+= 2; \
+        ptr += 2; \
+        result += 2; \
     } \
-	len = end - start;
+    len = end - start;
+
+#elif CRYPTOPP_BOOL_ARM64 && defined(CRYPTOPP_ARM_NEON_AVAILABLE)
+
+#define TC_XTS_SIMD_XOR 1
+
+#define XorBlocks(result,ptr,len,start,end) \
+    while (len >= 4) \
+    { \
+        uint8x16_t w0 = vld1q_u8((const unsigned char *)(ptr)); \
+        uint8x16_t w1 = vld1q_u8((const unsigned char *)(ptr + 2)); \
+        uint8x16_t w2 = vld1q_u8((const unsigned char *)(ptr + 4)); \
+        uint8x16_t w3 = vld1q_u8((const unsigned char *)(ptr + 6)); \
+        \
+        uint8x16_t b0 = vld1q_u8((const unsigned char *)(result)); \
+        uint8x16_t b1 = vld1q_u8((const unsigned char *)(result + 2)); \
+        uint8x16_t b2 = vld1q_u8((const unsigned char *)(result + 4)); \
+        uint8x16_t b3 = vld1q_u8((const unsigned char *)(result + 6)); \
+        \
+        vst1q_u8((unsigned char *)(result),     veorq_u8(b0, w0)); \
+        vst1q_u8((unsigned char *)(result + 2), veorq_u8(b1, w1)); \
+        vst1q_u8((unsigned char *)(result + 4), veorq_u8(b2, w2)); \
+        vst1q_u8((unsigned char *)(result + 6), veorq_u8(b3, w3)); \
+        \
+        ptr += 8; \
+        result += 8; \
+        len -= 4; \
+    } \
+    \
+    while (len) \
+    { \
+        uint8x16_t w = vld1q_u8((const unsigned char *)(ptr)); \
+        uint8x16_t b = vld1q_u8((const unsigned char *)(result)); \
+        vst1q_u8((unsigned char *)(result), veorq_u8(b, w)); \
+        \
+        ptr += 2; \
+        result += 2; \
+        --len; \
+    } \
+    len = end - start;
+
+#else
+
+#define TC_XTS_SIMD_XOR 0
 
 #endif
 
@@ -113,6 +161,7 @@ static void EncryptBufferXTSParallel (unsigned __int8 *buffer,
 	unsigned __int64 *dataUnitBufPtr;
 	unsigned int startBlock = startCipherBlockNo, endBlock, block, countBlock;
 	TC_LARGEST_COMPILER_UINT remainingBlocks, dataUnitNo;
+	BOOL whiteningValuesUsed = FALSE;
 
 	/* The encrypted data unit number (i.e. the resultant ciphertext block) is to be multiplied in the
 	finite field GF(2^128) by j-th power of n, where j is the sequential plaintext/ciphertext block
@@ -141,6 +190,28 @@ static void EncryptBufferXTSParallel (unsigned __int8 *buffer,
 			endBlock = BLOCKS_PER_XTS_DATA_UNIT;
 		countBlock = endBlock - startBlock;
 
+#if CRYPTOPP_BOOL_ARM64 && defined(CRYPTOPP_ARM_AES_AVAILABLE)
+		if (cipher == AES
+			&& startBlock == 0
+			&& countBlock == BLOCKS_PER_XTS_DATA_UNIT
+			&& IsAesHwCpuSupported())
+		{
+			aes_hw_cpu_encrypt_xts_data_unit (
+				ks,
+				ks2,
+				(uint8 *) bufPtr,
+				byteBufUnitNo);
+
+			bufPtr += countBlock * 2;
+			remainingBlocks -= countBlock;
+			startBlock = 0;
+			dataUnitNo++;
+			*((unsigned __int64 *) byteBufUnitNo) = LE64 (dataUnitNo);
+			continue;
+		}
+#endif
+
+		whiteningValuesUsed = TRUE;
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 		whiteningValuePtr64 = (unsigned __int64 *) whiteningValue;
 
@@ -203,7 +274,7 @@ static void EncryptBufferXTSParallel (unsigned __int8 *buffer,
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 
 		// Encrypt all blocks in this data unit
-#if (CRYPTOPP_BOOL_SSE2_INTRINSICS_AVAILABLE && CRYPTOPP_BOOL_X64)
+#if TC_XTS_SIMD_XOR
 		XorBlocks (bufPtr, whiteningValuesPtr64, countBlock, startBlock, endBlock);
 #else
 		for (block = 0; block < countBlock; block++)
@@ -219,7 +290,7 @@ static void EncryptBufferXTSParallel (unsigned __int8 *buffer,
 		bufPtr = dataUnitBufPtr;
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 
-#if (CRYPTOPP_BOOL_SSE2_INTRINSICS_AVAILABLE && CRYPTOPP_BOOL_X64)
+#if TC_XTS_SIMD_XOR
 		XorBlocks (bufPtr, whiteningValuesPtr64, countBlock, startBlock, endBlock);
 #else
 		for (block = 0; block < countBlock; block++)
@@ -236,8 +307,11 @@ static void EncryptBufferXTSParallel (unsigned __int8 *buffer,
 		*((unsigned __int64 *) byteBufUnitNo) = LE64 (dataUnitNo);
 	}
 
-	FAST_ERASE64 (whiteningValue, sizeof (whiteningValue));
-	FAST_ERASE64 (whiteningValues, sizeof (whiteningValues));
+	if (whiteningValuesUsed)
+	{
+		FAST_ERASE64 (whiteningValue, sizeof (whiteningValue));
+		FAST_ERASE64 (whiteningValues, sizeof (whiteningValues));
+	}
 }
 
 
@@ -414,6 +488,7 @@ static void DecryptBufferXTSParallel (unsigned __int8 *buffer,
 	unsigned __int64 *dataUnitBufPtr;
 	unsigned int startBlock = startCipherBlockNo, endBlock, block, countBlock;
 	TC_LARGEST_COMPILER_UINT remainingBlocks, dataUnitNo;
+	BOOL whiteningValuesUsed = FALSE;
 
 	// Convert the 64-bit data unit number into a little-endian 16-byte array.
 	// Note that as we are converting a 64-bit number into a 16-byte array we can always zero the last 8 bytes.
@@ -435,6 +510,28 @@ static void DecryptBufferXTSParallel (unsigned __int8 *buffer,
 			endBlock = BLOCKS_PER_XTS_DATA_UNIT;
 		countBlock = endBlock - startBlock;
 
+#if CRYPTOPP_BOOL_ARM64 && defined(CRYPTOPP_ARM_AES_AVAILABLE)
+		if (cipher == AES
+			&& startBlock == 0
+			&& countBlock == BLOCKS_PER_XTS_DATA_UNIT
+			&& IsAesHwCpuSupported())
+		{
+			aes_hw_cpu_decrypt_xts_data_unit (
+				(const uint8 *) ks + sizeof (aes_encrypt_ctx),
+				ks2,
+				(uint8 *) bufPtr,
+				byteBufUnitNo);
+
+			bufPtr += countBlock * 2;
+			remainingBlocks -= countBlock;
+			startBlock = 0;
+			dataUnitNo++;
+			*((unsigned __int64 *) byteBufUnitNo) = LE64 (dataUnitNo);
+			continue;
+		}
+#endif
+
+		whiteningValuesUsed = TRUE;
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 		whiteningValuePtr64 = (unsigned __int64 *) whiteningValue;
 
@@ -497,7 +594,7 @@ static void DecryptBufferXTSParallel (unsigned __int8 *buffer,
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 
 		// Decrypt blocks in this data unit
-#if (CRYPTOPP_BOOL_SSE2_INTRINSICS_AVAILABLE && CRYPTOPP_BOOL_X64)
+#if TC_XTS_SIMD_XOR
 		XorBlocks (bufPtr, whiteningValuesPtr64, countBlock, startBlock, endBlock);
 #else
 		for (block = 0; block < countBlock; block++)
@@ -506,12 +603,12 @@ static void DecryptBufferXTSParallel (unsigned __int8 *buffer,
 			*bufPtr++ ^= *whiteningValuesPtr64++;
 		}
 #endif
-		DecipherBlocks (cipher, dataUnitBufPtr, ks, endBlock - startBlock);
+		DecipherBlocks (cipher, dataUnitBufPtr, ks, countBlock);
 
 		bufPtr = dataUnitBufPtr;
 		whiteningValuesPtr64 = (unsigned __int64 *) whiteningValues;
 
-#if (CRYPTOPP_BOOL_SSE2_INTRINSICS_AVAILABLE && CRYPTOPP_BOOL_X64)
+#if TC_XTS_SIMD_XOR
 		XorBlocks (bufPtr, whiteningValuesPtr64, countBlock, startBlock, endBlock);
 #else
 		for (block = 0; block < countBlock; block++)
@@ -527,8 +624,11 @@ static void DecryptBufferXTSParallel (unsigned __int8 *buffer,
 		*((unsigned __int64 *) byteBufUnitNo) = LE64 (dataUnitNo);
 	}
 
-	FAST_ERASE64 (whiteningValue, sizeof (whiteningValue));
-	FAST_ERASE64 (whiteningValues, sizeof (whiteningValues));
+	if (whiteningValuesUsed)
+	{
+		FAST_ERASE64 (whiteningValue, sizeof (whiteningValue));
+		FAST_ERASE64 (whiteningValues, sizeof (whiteningValues));
+	}
 }
 
 

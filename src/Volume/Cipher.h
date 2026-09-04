@@ -19,6 +19,7 @@
 namespace VeraCrypt
 {
 	class Cipher;
+	class EncryptionModeXTS;
 	typedef vector < shared_ptr <Cipher> > CipherList;
 
 	class Cipher
@@ -69,6 +70,7 @@ namespace VeraCrypt
 		SecureBuffer ScheduledKey;
 
 	private:
+		friend class EncryptionModeXTS;
 		Cipher (const Cipher &);
 		Cipher &operator= (const Cipher &);
 	};

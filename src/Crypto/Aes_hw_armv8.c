@@ -54,6 +54,44 @@ VC_INLINE void aes_enc_4_blocks_last(uint8x16_t* B0, uint8x16_t* B1,
     *B3 = veorq_u8(vaeseq_u8(*B3, K), K2);
 }
 
+VC_INLINE uint8x16_t aes256_hw_encrypt_tweak(uint8x16_t tweak, const uint8* ks)
+{
+    aes_enc_block(&tweak, vld1q_u8(ks +  0 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  1 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  2 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  3 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  4 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  5 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  6 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  7 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  8 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks +  9 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks + 10 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks + 11 * 16));
+    aes_enc_block(&tweak, vld1q_u8(ks + 12 * 16));
+    aes_enc_block_last(
+        &tweak,
+        vld1q_u8(ks + 13 * 16),
+        vld1q_u8(ks + 14 * 16));
+    return tweak;
+}
+
+VC_INLINE uint8x16_t xts_mul_x(uint8x16_t tweak)
+{
+    const uint64x2_t zero = vdupq_n_u64(0);
+    const uint64x2_t polynomial = vdupq_n_u64(0x87);
+    const uint64x2_t lanes = vreinterpretq_u64_u8(tweak);
+    const uint64x2_t carries = vshrq_n_u64(lanes, 63);
+    const uint64x2_t lowCarry = vextq_u64(zero, carries, 1);
+    const uint64x2_t highCarry = vextq_u64(carries, zero, 1);
+    const uint64x2_t reductionMask = vreinterpretq_u64_s64(
+        vnegq_s64(vreinterpretq_s64_u64(highCarry)));
+    const uint64x2_t shifted = vorrq_u64(vshlq_n_u64(lanes, 1), lowCarry);
+
+    return vreinterpretq_u8_u64(
+        veorq_u64(shifted, vandq_u64(reductionMask, polynomial)));
+}
+
 // Single block decryption operations
 VC_INLINE void aes_dec_block(uint8x16_t* B, uint8x16_t K)
 {
@@ -150,6 +188,139 @@ VC_INLINE void aes256_hw_encrypt_blocks(uint8 buffer[], size_t blocks, const uin
         aes_enc_block(&B, K12);
         aes_enc_block_last(&B, K13, K14);
         vst1q_u8(buffer + 16 * i, B);
+    }
+}
+
+VC_INLINE void aes256_hw_encrypt_xts_32_blocks(
+    uint8 data[],
+    const uint8 tweaks[],
+    const uint8* ks)
+{
+    const uint8x16_t K0  = vld1q_u8(ks +  0 * 16);
+    const uint8x16_t K1  = vld1q_u8(ks +  1 * 16);
+    const uint8x16_t K2  = vld1q_u8(ks +  2 * 16);
+    const uint8x16_t K3  = vld1q_u8(ks +  3 * 16);
+    const uint8x16_t K4  = vld1q_u8(ks +  4 * 16);
+    const uint8x16_t K5  = vld1q_u8(ks +  5 * 16);
+    const uint8x16_t K6  = vld1q_u8(ks +  6 * 16);
+    const uint8x16_t K7  = vld1q_u8(ks +  7 * 16);
+    const uint8x16_t K8  = vld1q_u8(ks +  8 * 16);
+    const uint8x16_t K9  = vld1q_u8(ks +  9 * 16);
+    const uint8x16_t K10 = vld1q_u8(ks + 10 * 16);
+    const uint8x16_t K11 = vld1q_u8(ks + 11 * 16);
+    const uint8x16_t K12 = vld1q_u8(ks + 12 * 16);
+    const uint8x16_t K13 = vld1q_u8(ks + 13 * 16);
+    const uint8x16_t K14 = vld1q_u8(ks + 14 * 16);
+
+    for (size_t block = 0; block < 32; block += 4)
+    {
+        uint8 *d = data + block * 16;
+        const uint8 *t = tweaks + block * 16;
+
+        const uint8x16_t T0 = vld1q_u8(t +  0);
+        const uint8x16_t T1 = vld1q_u8(t + 16);
+        const uint8x16_t T2 = vld1q_u8(t + 32);
+        const uint8x16_t T3 = vld1q_u8(t + 48);
+
+        uint8x16_t B0 = veorq_u8(vld1q_u8(d +  0), T0);
+        uint8x16_t B1 = veorq_u8(vld1q_u8(d + 16), T1);
+        uint8x16_t B2 = veorq_u8(vld1q_u8(d + 32), T2);
+        uint8x16_t B3 = veorq_u8(vld1q_u8(d + 48), T3);
+
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K0);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K1);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K2);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K3);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K4);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K5);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K6);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K7);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K8);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K9);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K10);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K11);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K12);
+
+        aes_enc_4_blocks_last(
+            &B0, &B1, &B2, &B3,
+            K13, K14);
+
+        B0 = veorq_u8(B0, T0);
+        B1 = veorq_u8(B1, T1);
+        B2 = veorq_u8(B2, T2);
+        B3 = veorq_u8(B3, T3);
+
+        vst1q_u8(d +  0, B0);
+        vst1q_u8(d + 16, B1);
+        vst1q_u8(d + 32, B2);
+        vst1q_u8(d + 48, B3);
+    }
+}
+
+VC_INLINE void aes256_hw_encrypt_xts_data_unit(
+    uint8 data[],
+    const uint8 dataUnitNo[],
+    const uint8* ks,
+    const uint8* ks2)
+{
+    const uint8x16_t K0  = vld1q_u8(ks +  0 * 16);
+    const uint8x16_t K1  = vld1q_u8(ks +  1 * 16);
+    const uint8x16_t K2  = vld1q_u8(ks +  2 * 16);
+    const uint8x16_t K3  = vld1q_u8(ks +  3 * 16);
+    const uint8x16_t K4  = vld1q_u8(ks +  4 * 16);
+    const uint8x16_t K5  = vld1q_u8(ks +  5 * 16);
+    const uint8x16_t K6  = vld1q_u8(ks +  6 * 16);
+    const uint8x16_t K7  = vld1q_u8(ks +  7 * 16);
+    const uint8x16_t K8  = vld1q_u8(ks +  8 * 16);
+    const uint8x16_t K9  = vld1q_u8(ks +  9 * 16);
+    const uint8x16_t K10 = vld1q_u8(ks + 10 * 16);
+    const uint8x16_t K11 = vld1q_u8(ks + 11 * 16);
+    const uint8x16_t K12 = vld1q_u8(ks + 12 * 16);
+    const uint8x16_t K13 = vld1q_u8(ks + 13 * 16);
+    const uint8x16_t K14 = vld1q_u8(ks + 14 * 16);
+
+    uint8x16_t tweak = aes256_hw_encrypt_tweak(vld1q_u8(dataUnitNo), ks2);
+
+    for (size_t block = 0; block < 32; block += 4)
+    {
+        uint8 *d = data + block * 16;
+
+        const uint8x16_t T0 = tweak;
+        const uint8x16_t T1 = xts_mul_x(T0);
+        const uint8x16_t T2 = xts_mul_x(T1);
+        const uint8x16_t T3 = xts_mul_x(T2);
+
+        uint8x16_t B0 = veorq_u8(vld1q_u8(d +  0), T0);
+        uint8x16_t B1 = veorq_u8(vld1q_u8(d + 16), T1);
+        uint8x16_t B2 = veorq_u8(vld1q_u8(d + 32), T2);
+        uint8x16_t B3 = veorq_u8(vld1q_u8(d + 48), T3);
+
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K0);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K1);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K2);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K3);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K4);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K5);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K6);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K7);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K8);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K9);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K10);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K11);
+        aes_enc_4_blocks(&B0, &B1, &B2, &B3, K12);
+        aes_enc_4_blocks_last(&B0, &B1, &B2, &B3, K13, K14);
+
+        B0 = veorq_u8(B0, T0);
+        B1 = veorq_u8(B1, T1);
+        B2 = veorq_u8(B2, T2);
+        B3 = veorq_u8(B3, T3);
+
+        vst1q_u8(d +  0, B0);
+        vst1q_u8(d + 16, B1);
+        vst1q_u8(d + 32, B2);
+        vst1q_u8(d + 48, B3);
+
+        tweak = xts_mul_x(T3);
     }
 }
 
@@ -257,6 +428,139 @@ VC_INLINE void aes256_hw_decrypt_blocks(uint8 buffer[], size_t blocks, const uin
     }
 }
 
+VC_INLINE void aes256_hw_decrypt_xts_32_blocks(
+    uint8 data[],
+    const uint8 tweaks[],
+    const uint8* ks)
+{
+    const uint8x16_t K0  = vld1q_u8(ks +  0 * 16);
+    const uint8x16_t K1  = vld1q_u8(ks +  1 * 16);
+    const uint8x16_t K2  = vld1q_u8(ks +  2 * 16);
+    const uint8x16_t K3  = vld1q_u8(ks +  3 * 16);
+    const uint8x16_t K4  = vld1q_u8(ks +  4 * 16);
+    const uint8x16_t K5  = vld1q_u8(ks +  5 * 16);
+    const uint8x16_t K6  = vld1q_u8(ks +  6 * 16);
+    const uint8x16_t K7  = vld1q_u8(ks +  7 * 16);
+    const uint8x16_t K8  = vld1q_u8(ks +  8 * 16);
+    const uint8x16_t K9  = vld1q_u8(ks +  9 * 16);
+    const uint8x16_t K10 = vld1q_u8(ks + 10 * 16);
+    const uint8x16_t K11 = vld1q_u8(ks + 11 * 16);
+    const uint8x16_t K12 = vld1q_u8(ks + 12 * 16);
+    const uint8x16_t K13 = vld1q_u8(ks + 13 * 16);
+    const uint8x16_t K14 = vld1q_u8(ks + 14 * 16);
+
+    for (size_t block = 0; block < 32; block += 4)
+    {
+        uint8 *d = data + block * 16;
+        const uint8 *t = tweaks + block * 16;
+
+        const uint8x16_t T0 = vld1q_u8(t +  0);
+        const uint8x16_t T1 = vld1q_u8(t + 16);
+        const uint8x16_t T2 = vld1q_u8(t + 32);
+        const uint8x16_t T3 = vld1q_u8(t + 48);
+
+        uint8x16_t B0 = veorq_u8(vld1q_u8(d +  0), T0);
+        uint8x16_t B1 = veorq_u8(vld1q_u8(d + 16), T1);
+        uint8x16_t B2 = veorq_u8(vld1q_u8(d + 32), T2);
+        uint8x16_t B3 = veorq_u8(vld1q_u8(d + 48), T3);
+
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K0);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K1);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K2);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K3);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K4);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K5);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K6);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K7);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K8);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K9);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K10);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K11);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K12);
+
+        aes_dec_4_blocks_last(
+            &B0, &B1, &B2, &B3,
+            K13, K14);
+
+        B0 = veorq_u8(B0, T0);
+        B1 = veorq_u8(B1, T1);
+        B2 = veorq_u8(B2, T2);
+        B3 = veorq_u8(B3, T3);
+
+        vst1q_u8(d +  0, B0);
+        vst1q_u8(d + 16, B1);
+        vst1q_u8(d + 32, B2);
+        vst1q_u8(d + 48, B3);
+    }
+}
+
+VC_INLINE void aes256_hw_decrypt_xts_data_unit(
+    uint8 data[],
+    const uint8 dataUnitNo[],
+    const uint8* ks,
+    const uint8* ks2)
+{
+    const uint8x16_t K0  = vld1q_u8(ks +  0 * 16);
+    const uint8x16_t K1  = vld1q_u8(ks +  1 * 16);
+    const uint8x16_t K2  = vld1q_u8(ks +  2 * 16);
+    const uint8x16_t K3  = vld1q_u8(ks +  3 * 16);
+    const uint8x16_t K4  = vld1q_u8(ks +  4 * 16);
+    const uint8x16_t K5  = vld1q_u8(ks +  5 * 16);
+    const uint8x16_t K6  = vld1q_u8(ks +  6 * 16);
+    const uint8x16_t K7  = vld1q_u8(ks +  7 * 16);
+    const uint8x16_t K8  = vld1q_u8(ks +  8 * 16);
+    const uint8x16_t K9  = vld1q_u8(ks +  9 * 16);
+    const uint8x16_t K10 = vld1q_u8(ks + 10 * 16);
+    const uint8x16_t K11 = vld1q_u8(ks + 11 * 16);
+    const uint8x16_t K12 = vld1q_u8(ks + 12 * 16);
+    const uint8x16_t K13 = vld1q_u8(ks + 13 * 16);
+    const uint8x16_t K14 = vld1q_u8(ks + 14 * 16);
+
+    uint8x16_t tweak = aes256_hw_encrypt_tweak(vld1q_u8(dataUnitNo), ks2);
+
+    for (size_t block = 0; block < 32; block += 4)
+    {
+        uint8 *d = data + block * 16;
+
+        const uint8x16_t T0 = tweak;
+        const uint8x16_t T1 = xts_mul_x(T0);
+        const uint8x16_t T2 = xts_mul_x(T1);
+        const uint8x16_t T3 = xts_mul_x(T2);
+
+        uint8x16_t B0 = veorq_u8(vld1q_u8(d +  0), T0);
+        uint8x16_t B1 = veorq_u8(vld1q_u8(d + 16), T1);
+        uint8x16_t B2 = veorq_u8(vld1q_u8(d + 32), T2);
+        uint8x16_t B3 = veorq_u8(vld1q_u8(d + 48), T3);
+
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K0);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K1);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K2);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K3);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K4);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K5);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K6);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K7);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K8);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K9);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K10);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K11);
+        aes_dec_4_blocks(&B0, &B1, &B2, &B3, K12);
+        aes_dec_4_blocks_last(&B0, &B1, &B2, &B3, K13, K14);
+
+        B0 = veorq_u8(B0, T0);
+        B1 = veorq_u8(B1, T1);
+        B2 = veorq_u8(B2, T2);
+        B3 = veorq_u8(B3, T3);
+
+        vst1q_u8(d +  0, B0);
+        vst1q_u8(d + 16, B1);
+        vst1q_u8(d + 32, B2);
+        vst1q_u8(d + 48, B3);
+
+        tweak = xts_mul_x(T3);
+    }
+}
+
 VC_INLINE void aes256_hw_decrypt_block(uint8 buffer[], const uint8* ks)
 {
     const uint8x16_t K0 = vld1q_u8(ks + 0 * 16);
@@ -312,5 +616,42 @@ void aes_hw_cpu_encrypt_32_blocks (const uint8 *ks, uint8 *data)
 {
     aes256_hw_encrypt_blocks(data, 32, ks);
 }
+
+
+void aes_hw_cpu_encrypt_xts_32_blocks(
+    const uint8 *ks,
+    uint8 *data,
+    const uint8 *tweaks)
+{
+    aes256_hw_encrypt_xts_32_blocks(data, tweaks, ks);
+}
+
+void aes_hw_cpu_decrypt_xts_32_blocks(
+    const uint8 *ks,
+    uint8 *data,
+    const uint8 *tweaks)
+{
+    aes256_hw_decrypt_xts_32_blocks(data, tweaks, ks);
+}
+
+
+void aes_hw_cpu_encrypt_xts_data_unit(
+    const uint8 *ks,
+    const uint8 *ks2,
+    uint8 *data,
+    const uint8 *dataUnitNo)
+{
+    aes256_hw_encrypt_xts_data_unit(data, dataUnitNo, ks, ks2);
+}
+
+void aes_hw_cpu_decrypt_xts_data_unit(
+    const uint8 *ks,
+    const uint8 *ks2,
+    uint8 *data,
+    const uint8 *dataUnitNo)
+{
+    aes256_hw_decrypt_xts_data_unit(data, dataUnitNo, ks, ks2);
+}
+
 
 #endif
